@@ -2,6 +2,15 @@ import React, { useEffect, useRef, useState } from "react";
 
 type DeviceType = "temperature" | "sound" | "computer" | "camera" | "speaker";
 
+interface SensorData {
+  temperature?: number;
+  sound?: number;
+  camera?: {
+    motion: boolean;
+    lightLevel: number;
+  };
+}
+
 interface Node {
   id: string;
   x: number;
@@ -15,6 +24,7 @@ interface Node {
   details: string;
   image: HTMLImageElement;
   pulse?: number;
+  sensorData?: SensorData;
 }
 
 const deviceTemplates: { type: DeviceType; name: string; details: string; image: string }[] = [
@@ -38,6 +48,8 @@ function NetworkCanvas() {
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [deviceCount, setDeviceCount] = useState(0);
   const [time, setTime] = useState(0);
+  const [selectedDeviceType, setSelectedDeviceType] = useState<DeviceType | "random">("random");
+  const [sensorUpdateInterval, setSensorUpdateInterval] = useState<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const pcImg = new Image();
@@ -93,92 +105,146 @@ function NetworkCanvas() {
     return { x, y };
   };
 
-
-const addDevice = () => {
-  if (deviceCount >= 10) return;
-  const template = deviceTemplates[Math.floor(Math.random() * deviceTemplates.length)];
-  const id = String.fromCharCode(65 + deviceCount);
-  const { x, y } = generatePosition();
-  const img = new Image();
-  img.src = `/assets/${template.image}`;
-
-  img.onload = () => {
-    const getAllComputers = () => nodes.filter(n => n.type === "computer");
-    const getLeastLoadedComputer = () => {
-      const computers = getAllComputers();
-      const loadMap = computers.map(pc => ({
-        pc,
-        load: nodes.filter(n => n.connections.includes(pc.id)).length
-      }));
-      return loadMap.sort((a, b) => a.load - b.load)[0]?.pc || computers[0];
-    };
-
-    const getSecondaryNode = () => nodes.find(n => n.name.includes("Servidor")) || nodes[0];
-
-    let connections: string[] = [];
-
-    if (template.type === "computer") {
-      connections.push(getSecondaryNode().id);
-    } else if (["camera", "sound", "temperature"].includes(template.type)) {
-      const leastLoaded = getLeastLoadedComputer();
-      connections.push(leastLoaded.id);
-      if (!leastLoaded.name.includes("Servidor")) {
-        connections.push(getSecondaryNode().id);
-      }
-    } else if (template.type === "speaker") {
-      const leastLoaded = getLeastLoadedComputer();
-      connections.push(leastLoaded.id);
+  const generateSensorData = (type: DeviceType): SensorData => {
+    switch (type) {
+      case "temperature":
+        return {
+          temperature: Math.round((36.5 + Math.random() * 3) * 10) / 10 // 36.5°C to 39.5°C
+        };
+      case "sound":
+        return {
+          sound: Math.round((30 + Math.random() * 50)) // 30dB to 80dB
+        };
+      case "camera":
+        return {
+          camera: {
+            motion: Math.random() > 0.7, // 30% chance of motion
+            lightLevel: Math.round((40 + Math.random() * 60)) // 40% to 100% light level
+          }
+        };
+      default:
+        return {};
     }
+  };
 
-    const newNode: Node = {
-      id,
-      x,
-      y,
-      type: template.type,
-      connections,
-      traffic: 0,
-      name: `${template.name} ${id}`,
-      status: Math.random() > 0.1 ? "online" : "offline",
-      quality: Math.floor(60 + Math.random() * 40),
-      details: template.details,
-      image: img
-    };
-
-    setNodes(prev => {
-      const updatedNodes = [...prev, newNode];
-      if (template.type === "computer" && !template.name.includes("PC Control") && deviceCount + 1 < 10) {
-        const sensorTemplate = deviceTemplates.find(t => ["temperature", "sound", "camera"].includes(t.type));
-        if (sensorTemplate) {
-          const sensorImg = new Image();
-          sensorImg.src = `/assets/${sensorTemplate.image}`;
-          sensorImg.onload = () => {
-            const sensorId = String.fromCharCode(65 + deviceCount + 1);
-            const pos = generatePosition();
-            const sensorNode: Node = {
-              id: sensorId,
-              x: pos.x,
-              y: pos.y,
-              type: sensorTemplate.type,
-              connections: [id],
-              traffic: 0,
-              name: `${sensorTemplate.name} ${sensorId}`,
-              status: Math.random() > 0.1 ? "online" : "offline",
-              quality: Math.floor(60 + Math.random() * 40),
-              details: sensorTemplate.details,
-              image: sensorImg
-            };
-            setNodes(n => [...n, sensorNode]);
-            setDeviceCount(c => c + 1);
+  const updateSensorData = () => {
+    setNodes(prevNodes => 
+      prevNodes.map(node => {
+        if (node.status === "offline") return node;
+        
+        if (["temperature", "sound", "camera"].includes(node.type)) {
+          return {
+            ...node,
+            sensorData: generateSensorData(node.type)
           };
         }
-      }
-      return updatedNodes;
-    });
-    setDeviceCount(c => c + 1);
+        return node;
+      })
+    );
   };
-};
 
+  useEffect(() => {
+    const interval = setInterval(updateSensorData, 3000); // Update every 3 seconds
+    setSensorUpdateInterval(interval);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, []);
 
+  const addDevice = () => {
+    if (deviceCount >= 10) return;
+    
+    let template;
+    if (selectedDeviceType === "random") {
+      template = deviceTemplates[Math.floor(Math.random() * deviceTemplates.length)];
+    } else {
+      const availableTemplates = deviceTemplates.filter(t => t.type === selectedDeviceType);
+      template = availableTemplates[Math.floor(Math.random() * availableTemplates.length)];
+    }
+    
+    const id = String.fromCharCode(65 + deviceCount);
+    const { x, y } = generatePosition();
+    const img = new Image();
+    img.src = `/assets/${template.image}`;
+
+    img.onload = () => {
+      const getAllComputers = () => nodes.filter(n => n.type === "computer");
+      const getLeastLoadedComputer = () => {
+        const computers = getAllComputers();
+        const loadMap = computers.map(pc => ({
+          pc,
+          load: nodes.filter(n => n.connections.includes(pc.id)).length
+        }));
+        return loadMap.sort((a, b) => a.load - b.load)[0]?.pc || computers[0];
+      };
+
+      const getSecondaryNode = () => nodes.find(n => n.name.includes("Servidor")) || nodes[0];
+
+      let connections: string[] = [];
+
+      if (template.type === "computer") {
+        connections.push(getSecondaryNode().id);
+      } else if (["camera", "sound", "temperature"].includes(template.type)) {
+        const leastLoaded = getLeastLoadedComputer();
+        connections.push(leastLoaded.id);
+        if (!leastLoaded.name.includes("Servidor")) {
+          connections.push(getSecondaryNode().id);
+        }
+      } else if (template.type === "speaker") {
+        const leastLoaded = getLeastLoadedComputer();
+        connections.push(leastLoaded.id);
+      }
+
+      const newNode: Node = {
+        id,
+        x,
+        y,
+        type: template.type,
+        connections,
+        traffic: 0,
+        name: `${template.name} ${id}`,
+        status: Math.random() > 0.1 ? "online" : "offline",
+        quality: Math.floor(60 + Math.random() * 40),
+        details: template.details,
+        image: img,
+        sensorData: ["temperature", "sound", "camera"].includes(template.type) 
+          ? generateSensorData(template.type)
+          : undefined
+      };
+
+      setNodes(prev => {
+        const updatedNodes = [...prev, newNode];
+        if (template.type === "computer" && !template.name.includes("PC Control") && deviceCount + 1 < 10) {
+          const sensorTemplate = deviceTemplates.find(t => ["temperature", "sound", "camera"].includes(t.type));
+          if (sensorTemplate) {
+            const sensorImg = new Image();
+            sensorImg.src = `/assets/${sensorTemplate.image}`;
+            sensorImg.onload = () => {
+              const sensorId = String.fromCharCode(65 + deviceCount + 1);
+              const pos = generatePosition();
+              const sensorNode: Node = {
+                id: sensorId,
+                x: pos.x,
+                y: pos.y,
+                type: sensorTemplate.type,
+                connections: [id],
+                traffic: 0,
+                name: `${sensorTemplate.name} ${sensorId}`,
+                status: Math.random() > 0.1 ? "online" : "offline",
+                quality: Math.floor(60 + Math.random() * 40),
+                details: sensorTemplate.details,
+                image: sensorImg
+              };
+              setNodes(n => [...n, sensorNode]);
+              setDeviceCount(c => c + 1);
+            };
+          }
+        }
+        return updatedNodes;
+      });
+      setDeviceCount(c => c + 1);
+    };
+  };
 
   const toggleStatusCascade = (targetId: string, turnOn: boolean, visited = new Set<string>()) => {
     if (visited.has(targetId)) return;
@@ -292,6 +358,26 @@ const addDevice = () => {
     ctx.rect(qualityX, qualityY, (qualityBarWidth * node.quality) / 100, qualityBarHeight);
     ctx.fillStyle = node.quality > 80 ? "#4CAF50" : node.quality > 60 ? "#FFC107" : "#f44336";
     ctx.fill();
+
+    // Draw sensor data if available
+    if (node.sensorData && node.status === "online") {
+      ctx.font = "12px Arial";
+      ctx.fillStyle = "#333";
+      ctx.textAlign = "center";
+      
+      let sensorText = "";
+      if (node.type === "temperature" && node.sensorData.temperature) {
+        sensorText = `${node.sensorData.temperature}°C`;
+      } else if (node.type === "sound" && node.sensorData.sound) {
+        sensorText = `${node.sensorData.sound}dB`;
+      } else if (node.type === "camera" && node.sensorData.camera) {
+        sensorText = `${node.sensorData.camera.lightLevel}% ${node.sensorData.camera.motion ? "🔴" : "⚪"}`;
+      }
+
+      if (sensorText) {
+        ctx.fillText(sensorText, node.x, node.y + 45);
+      }
+    }
   };
 
   const draw = () => {
@@ -348,23 +434,43 @@ const addDevice = () => {
     <div style={{ position: "relative", background: "#f5f5f5", padding: "20px", borderRadius: "12px", display: "flex", flexDirection: "column", alignItems: "center" }}>
       <div style={{ marginBottom: "20px", display: "flex", flexDirection: "row", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
         <h2 style={{ margin: 0, color: "#333" }}>Simulación de red</h2>
-        <button
-          onClick={addDevice}
-          style={{
-            padding: "8px 16px",
-            backgroundColor: "#007bff",
-            color: "#fff",
-            border: "none",
-            borderRadius: "6px",
-            cursor: deviceCount < 10 ? "pointer" : "not-allowed",
-            opacity: deviceCount < 10 ? 1 : 0.5,
-            transition: "all 0.2s ease",
-            boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
-          }}
-          disabled={deviceCount >= 10}
-        >
-          Agregar dispositivo ({deviceCount}/10)
-        </button>
+        <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+          <select
+            value={selectedDeviceType}
+            onChange={(e) => setSelectedDeviceType(e.target.value as DeviceType | "random")}
+            style={{
+              padding: "8px",
+              borderRadius: "6px",
+              border: "1px solid #ddd",
+              backgroundColor: "#fff",
+              cursor: "pointer"
+            }}
+          >
+            <option value="random">Tipo aleatorio</option>
+            <option value="temperature">Sensor de temperatura</option>
+            <option value="sound">Sensor de sonido</option>
+            <option value="computer">Computadora</option>
+            <option value="camera">Cámara</option>
+            <option value="speaker">Bocina</option>
+          </select>
+          <button
+            onClick={addDevice}
+            style={{
+              padding: "8px 16px",
+              backgroundColor: "#007bff",
+              color: "#fff",
+              border: "none",
+              borderRadius: "6px",
+              cursor: deviceCount < 10 ? "pointer" : "not-allowed",
+              opacity: deviceCount < 10 ? 1 : 0.5,
+              transition: "all 0.2s ease",
+              boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
+            }}
+            disabled={deviceCount >= 10}
+          >
+            Agregar dispositivo ({deviceCount}/10)
+          </button>
+        </div>
       </div>
 
       <canvas
@@ -419,6 +525,22 @@ const addDevice = () => {
             />
             {hoveredNode.status}
           </div>
+          {hoveredNode.sensorData && hoveredNode.status === "online" && (
+            <div style={{ marginBottom: "8px" }}>
+              <b>Lectura actual:</b>
+              {hoveredNode.type === "temperature" && hoveredNode.sensorData.temperature && (
+                <span> {hoveredNode.sensorData.temperature}°C</span>
+              )}
+              {hoveredNode.type === "sound" && hoveredNode.sensorData.sound && (
+                <span> {hoveredNode.sensorData.sound}dB</span>
+              )}
+              {hoveredNode.type === "camera" && hoveredNode.sensorData.camera && (
+                <span> Luz: {hoveredNode.sensorData.camera.lightLevel}% | 
+                  Movimiento: {hoveredNode.sensorData.camera.motion ? "Detectado" : "No detectado"}
+                </span>
+              )}
+            </div>
+          )}
           <div style={{ marginBottom: "8px" }}>
             <b>Calidad:</b> {hoveredNode.quality}%
             <div
