@@ -1,13 +1,22 @@
 import React, { useEffect, useRef, useState } from "react";
+import { useWebSocket } from '../context/WebSocketContext';
+import { useDevices } from '../context/DeviceContext';
 
 type DeviceType = "temperature" | "sound" | "computer" | "camera" | "speaker";
 
 interface SensorData {
-  temperature?: number;
-  sound?: number;
+  temperature?: {
+    value: number;
+    timestamp: string;
+  };
+  sound?: {
+    value: number;
+    timestamp: string;
+  };
   camera?: {
     motion: boolean;
     lightLevel: number;
+    timestamp: string;
   };
 }
 
@@ -27,6 +36,31 @@ interface Node {
   sensorData?: SensorData;
 }
 
+interface Device {
+  id: string;
+  type: string;
+  status: 'online' | 'offline';
+  data: {
+    temperatura?: string;
+    sonido?: number;
+    movimiento?: boolean;
+    timestamp: string;
+  };
+}
+
+interface WebSocketMessage {
+  type: 'init' | 'update';
+  timestamp: string;
+  networkStats: {
+    totalDevices: number;
+    onlineDevices: number;
+    networkQuality: number;
+    activeCameras: number;
+    motionDetected: number;
+  };
+  devices: Device[];
+}
+
 const deviceTemplates: { type: DeviceType; name: string; details: string; image: string }[] = [
   { type: "temperature", name: "Sensor T", details: "Sensor de temperatura ambiental", image: "temperatura.png" },
   { type: "temperature", name: "Sensor Temp Pro", details: "Sensor térmico industrial", image: "temperatura.png" },
@@ -43,6 +77,8 @@ const deviceTemplates: { type: DeviceType; name: string; details: string; image:
 function NetworkCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const { isConnected, error, lastMessage } = useWebSocket();
+  const { registerDevice, unregisterDevice } = useDevices();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [hoveredNode, setHoveredNode] = useState<Node | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
@@ -50,48 +86,204 @@ function NetworkCanvas() {
   const [time, setTime] = useState(0);
   const [selectedDeviceType, setSelectedDeviceType] = useState<DeviceType | "random">("random");
   const [sensorUpdateInterval, setSensorUpdateInterval] = useState<NodeJS.Timeout | null>(null);
+  const initialNodesCreated = useRef(false);
 
+  // Create initial nodes
   useEffect(() => {
-    const pcImg = new Image();
-    const serverImg = new Image();
-    pcImg.src = "/assets/computadora.png";
-    serverImg.src = "/assets/servidor.png";
-  
-    Promise.all([
-      new Promise(resolve => pcImg.onload = resolve),
-      new Promise(resolve => serverImg.onload = resolve)
-    ]).then(() => {
-      setNodes([
-        {
-          id: "A",
-          x: 500,
-          y: 250,
-          type: "computer",
-          connections: [],
-          traffic: 0,
-          name: "Servidor NodeX",
-          status: "online",
-          quality: 100,
-          details: "Servidor IoT dedicado",
-          image: serverImg
-        },
-        {
-          id: "B",
-          x: 300,
-          y: 250,
-          type: "computer",
-          connections: ["A"],
-          traffic: 0,
-          name: "PC Control",
-          status: "online",
-          quality: 100,
-          details: "Unidad central de control",
-          image: pcImg
-        },
-      ]);
-      setDeviceCount(2);
-    });
+    if (!initialNodesCreated.current) {
+      const pcImg = new Image();
+      const serverImg = new Image();
+      pcImg.src = "/assets/computadora.png";
+      serverImg.src = "/assets/servidor.png";
+    
+      Promise.all([
+        new Promise(resolve => pcImg.onload = resolve),
+        new Promise(resolve => serverImg.onload = resolve)
+      ]).then(() => {
+        setNodes([
+          {
+            id: "server-1",
+            x: 500,
+            y: 250,
+            type: "computer",
+            connections: [],
+            traffic: 0,
+            name: "Servidor NodeX",
+            status: "online",
+            quality: 100,
+            details: "Servidor IoT dedicado",
+            image: serverImg
+          },
+          {
+            id: "pc-1",
+            x: 300,
+            y: 250,
+            type: "computer",
+            connections: ["server-1"],
+            traffic: 0,
+            name: "PC Control",
+            status: "online",
+            quality: 100,
+            details: "Unidad central de control",
+            image: pcImg
+          },
+        ]);
+        initialNodesCreated.current = true;
+      });
+    }
   }, []);
+
+  // Handle WebSocket messages
+  useEffect(() => {
+    if (lastMessage) {
+      try {
+        const data = lastMessage as WebSocketMessage;
+        console.log('Received WebSocket message:', data);
+        
+        if (data.type === 'init' || data.type === 'update') {
+          console.log('Processing devices:', data.devices);
+          
+          // Update nodes based on device data
+          setNodes(prevNodes => {
+            console.log('Current nodes:', prevNodes);
+            
+            // Create a map of existing nodes for quick lookup
+            const nodeMap = new Map(prevNodes.map(node => [node.id, node]));
+            const updatedNodes = [...prevNodes];
+            
+            data.devices.forEach(device => {
+              console.log('Processing device:', device);
+              
+              // Skip if this is one of our initial nodes
+              if (device.id === "server-1" || device.id === "pc-1") {
+                console.log('Skipping initial node:', device.id);
+                return;
+              }
+
+              const existingNode = nodeMap.get(device.id);
+              if (existingNode) {
+                console.log('Updating existing node:', device.id);
+                // Update existing node
+                existingNode.status = device.status;
+                if (device.status === 'online') {
+                  existingNode.sensorData = {
+                    temperature: device.data.temperatura ? {
+                      value: parseFloat(device.data.temperatura),
+                      timestamp: device.data.timestamp
+                    } : undefined,
+                    sound: device.data.sonido ? {
+                      value: device.data.sonido,
+                      timestamp: device.data.timestamp
+                    } : undefined,
+                    camera: device.data.movimiento !== undefined ? {
+                      motion: device.data.movimiento,
+                      lightLevel: 100,
+                      timestamp: device.data.timestamp
+                    } : undefined
+                  };
+                }
+              } else {
+                console.log('Creating new node for device:', device.id);
+                // Create new node for newly registered device
+                const template = deviceTemplates.find(t => t.type === device.type);
+                if (template) {
+                  console.log('Found template for device:', template);
+                  const { x, y } = generatePosition();
+                  const img = new Image();
+                  img.src = `/assets/${template.image}`;
+                  
+                  // Create the node immediately without waiting for image load
+                  const newNode: Node = {
+                    id: device.id,
+                    x,
+                    y,
+                    type: device.type as DeviceType,
+                    connections: [],
+                    traffic: 0,
+                    name: `${template.name} ${device.id}`,
+                    status: device.status,
+                    quality: 100,
+                    details: template.details,
+                    image: img,
+                    sensorData: device.status === 'online' ? {
+                      temperature: device.data.temperatura ? {
+                        value: parseFloat(device.data.temperatura),
+                        timestamp: device.data.timestamp
+                      } : undefined,
+                      sound: device.data.sonido ? {
+                        value: device.data.sonido,
+                        timestamp: device.data.timestamp
+                      } : undefined,
+                      camera: device.data.movimiento !== undefined ? {
+                        motion: device.data.movimiento,
+                        lightLevel: 100,
+                        timestamp: device.data.timestamp
+                      } : undefined
+                    } : undefined
+                  };
+
+                  console.log('Created new node:', newNode);
+
+                  // Add the new node to both the map and the array
+                  nodeMap.set(device.id, newNode);
+                  updatedNodes.push(newNode);
+
+                  // Set up connections after the node is created
+                  img.onload = () => {
+                    console.log('Image loaded for device:', device.id);
+                    setNodes(currentNodes => {
+                      const getAllComputers = () => currentNodes.filter(n => n.type === "computer");
+                      const getLeastLoadedComputer = () => {
+                        const computers = getAllComputers();
+                        const loadMap = computers.map(pc => ({
+                          pc,
+                          load: currentNodes.filter(n => n.connections.includes(pc.id)).length
+                        }));
+                        return loadMap.sort((a, b) => a.load - b.load)[0]?.pc || computers[0];
+                      };
+
+                      const getSecondaryNode = () => currentNodes.find(n => n.name.includes("Servidor")) || currentNodes[0];
+
+                      let connections: string[] = [];
+                      if (device.type === "computer") {
+                        connections.push(getSecondaryNode().id);
+                      } else if (["camera", "sound", "temperature"].includes(device.type)) {
+                        const leastLoaded = getLeastLoadedComputer();
+                        connections.push(leastLoaded.id);
+                        if (!leastLoaded.name.includes("Servidor")) {
+                          connections.push(getSecondaryNode().id);
+                        }
+                      } else if (device.type === "speaker") {
+                        const leastLoaded = getLeastLoadedComputer();
+                        connections.push(leastLoaded.id);
+                      }
+
+                      console.log('Setting connections for device:', device.id, connections);
+
+                      return currentNodes.map(node => 
+                        node.id === device.id 
+                          ? { ...node, connections }
+                          : node
+                      );
+                    });
+                  };
+                } else {
+                  console.log('No template found for device type:', device.type);
+                }
+              }
+            });
+            
+            console.log('Final updated nodes:', updatedNodes);
+            return updatedNodes;
+          });
+          
+          setDeviceCount(data.networkStats.totalDevices);
+        }
+      } catch (err) {
+        console.error('Error processing WebSocket message:', err);
+      }
+    }
+  }, [lastMessage]);
 
   const isFarEnough = (x: number, y: number, minDist = 80) => !nodes.some(node => Math.hypot(node.x - x, node.y - y) < minDist);
 
@@ -105,53 +297,7 @@ function NetworkCanvas() {
     return { x, y };
   };
 
-  const generateSensorData = (type: DeviceType): SensorData => {
-    switch (type) {
-      case "temperature":
-        return {
-          temperature: Math.round((36.5 + Math.random() * 3) * 10) / 10 // 36.5°C to 39.5°C
-        };
-      case "sound":
-        return {
-          sound: Math.round((30 + Math.random() * 50)) // 30dB to 80dB
-        };
-      case "camera":
-        return {
-          camera: {
-            motion: Math.random() > 0.7, // 30% chance of motion
-            lightLevel: Math.round((40 + Math.random() * 60)) // 40% to 100% light level
-          }
-        };
-      default:
-        return {};
-    }
-  };
-
-  const updateSensorData = () => {
-    setNodes(prevNodes => 
-      prevNodes.map(node => {
-        if (node.status === "offline") return node;
-        
-        if (["temperature", "sound", "camera"].includes(node.type)) {
-          return {
-            ...node,
-            sensorData: generateSensorData(node.type)
-          };
-        }
-        return node;
-      })
-    );
-  };
-
-  useEffect(() => {
-    const interval = setInterval(updateSensorData, 3000); // Update every 3 seconds
-    setSensorUpdateInterval(interval);
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, []);
-
-  const addDevice = () => {
+  const addDevice = async () => {
     if (deviceCount >= 10) return;
     
     let template;
@@ -162,106 +308,40 @@ function NetworkCanvas() {
       template = availableTemplates[Math.floor(Math.random() * availableTemplates.length)];
     }
     
-    const id = String.fromCharCode(65 + deviceCount);
-    const { x, y } = generatePosition();
-    const img = new Image();
-    img.src = `/assets/${template.image}`;
-
-    img.onload = () => {
-      const getAllComputers = () => nodes.filter(n => n.type === "computer");
-      const getLeastLoadedComputer = () => {
-        const computers = getAllComputers();
-        const loadMap = computers.map(pc => ({
-          pc,
-          load: nodes.filter(n => n.connections.includes(pc.id)).length
-        }));
-        return loadMap.sort((a, b) => a.load - b.load)[0]?.pc || computers[0];
-      };
-
-      const getSecondaryNode = () => nodes.find(n => n.name.includes("Servidor")) || nodes[0];
-
-      let connections: string[] = [];
-
-      if (template.type === "computer") {
-        connections.push(getSecondaryNode().id);
-      } else if (["camera", "sound", "temperature"].includes(template.type)) {
-        const leastLoaded = getLeastLoadedComputer();
-        connections.push(leastLoaded.id);
-        if (!leastLoaded.name.includes("Servidor")) {
-          connections.push(getSecondaryNode().id);
-        }
-      } else if (template.type === "speaker") {
-        const leastLoaded = getLeastLoadedComputer();
-        connections.push(leastLoaded.id);
-      }
-
-      const newNode: Node = {
-        id,
-        x,
-        y,
-        type: template.type,
-        connections,
-        traffic: 0,
-        name: `${template.name} ${id}`,
-        status: Math.random() > 0.1 ? "online" : "offline",
-        quality: Math.floor(60 + Math.random() * 40),
-        details: template.details,
-        image: img,
-        sensorData: ["temperature", "sound", "camera"].includes(template.type) 
-          ? generateSensorData(template.type)
-          : undefined
-      };
-
-      setNodes(prev => {
-        const updatedNodes = [...prev, newNode];
-        if (template.type === "computer" && !template.name.includes("PC Control") && deviceCount + 1 < 10) {
-          const sensorTemplate = deviceTemplates.find(t => ["temperature", "sound", "camera"].includes(t.type));
-          if (sensorTemplate) {
-            const sensorImg = new Image();
-            sensorImg.src = `/assets/${sensorTemplate.image}`;
-            sensorImg.onload = () => {
-              const sensorId = String.fromCharCode(65 + deviceCount + 1);
-              const pos = generatePosition();
-              const sensorNode: Node = {
-                id: sensorId,
-                x: pos.x,
-                y: pos.y,
-                type: sensorTemplate.type,
-                connections: [id],
-                traffic: 0,
-                name: `${sensorTemplate.name} ${sensorId}`,
-                status: Math.random() > 0.1 ? "online" : "offline",
-                quality: Math.floor(60 + Math.random() * 40),
-                details: sensorTemplate.details,
-                image: sensorImg
-              };
-              setNodes(n => [...n, sensorNode]);
-              setDeviceCount(c => c + 1);
-            };
-          }
-        }
-        return updatedNodes;
-      });
-      setDeviceCount(c => c + 1);
-    };
+    try {
+      await registerDevice(template.type);
+    } catch (err) {
+      console.error('Failed to register device:', err);
+    }
   };
 
-  const toggleStatusCascade = (targetId: string, turnOn: boolean, visited = new Set<string>()) => {
+  const toggleStatusCascade = async (targetId: string, turnOn: boolean, visited = new Set<string>()) => {
     if (visited.has(targetId)) return;
     visited.add(targetId);
-    setNodes(prev => {
-      const newNodes = [...prev];
-      const target = newNodes.find(n => n.id === targetId);
-      if (!target) return prev;
-      target.status = turnOn ? "online" : "offline";
-      if (turnOn) {
-        // turn on dependents
-        newNodes.filter(n => n.connections.includes(targetId)).forEach(n => toggleStatusCascade(n.id, true, visited));
-      } else {
-        // turn off dependents
-        newNodes.filter(n => n.connections.includes(targetId)).forEach(n => toggleStatusCascade(n.id, false, visited));
+
+    const targetNode = nodes.find(n => n.id === targetId);
+    if (!targetNode) return;
+
+    const newStatus = turnOn ? "online" : "offline";
+    if (targetNode.status === newStatus) return;
+
+    if (!turnOn) {
+      try {
+        await unregisterDevice(targetNode.id);
+      } catch (err) {
+        console.error('Failed to unregister device:', err);
       }
-      return newNodes;
+    }
+
+    setNodes(prev => prev.map(node => {
+      if (node.id === targetId) {
+        return { ...node, status: newStatus };
+      }
+      return node;
+    }));
+
+    targetNode.connections.forEach(connId => {
+      toggleStatusCascade(connId, turnOn, visited);
     });
   };
 
@@ -367,9 +447,11 @@ function NetworkCanvas() {
       
       let sensorText = "";
       if (node.type === "temperature" && node.sensorData.temperature) {
-        sensorText = `${node.sensorData.temperature}°C`;
+        // Format temperature to match the chart display
+        const temp = node.sensorData.temperature.value;
+        sensorText = `${temp.toFixed(1)}°C`;
       } else if (node.type === "sound" && node.sensorData.sound) {
-        sensorText = `${node.sensorData.sound}dB`;
+        sensorText = `${node.sensorData.sound.value}dB`;
       } else if (node.type === "camera" && node.sensorData.camera) {
         sensorText = `${node.sensorData.camera.lightLevel}% ${node.sensorData.camera.motion ? "🔴" : "⚪"}`;
       }
@@ -432,6 +514,18 @@ function NetworkCanvas() {
 
   return (
     <div style={{ position: "relative", background: "#f5f5f5", padding: "20px", borderRadius: "12px", display: "flex", flexDirection: "column", alignItems: "center" }}>
+      {error && (
+        <div className="mb-4 p-4 bg-red-50 text-red-700 rounded-lg">
+          {error}
+        </div>
+      )}
+
+      {!isConnected && !error && (
+        <div className="mb-4 p-4 bg-yellow-50 text-yellow-700 rounded-lg">
+          Connecting to server...
+        </div>
+      )}
+
       <div style={{ marginBottom: "20px", display: "flex", flexDirection: "row", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
         <h2 style={{ margin: 0, color: "#333" }}>Simulación de red</h2>
         <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
@@ -529,10 +623,10 @@ function NetworkCanvas() {
             <div style={{ marginBottom: "8px" }}>
               <b>Lectura actual:</b>
               {hoveredNode.type === "temperature" && hoveredNode.sensorData.temperature && (
-                <span> {hoveredNode.sensorData.temperature}°C</span>
+                <span> {hoveredNode.sensorData.temperature.value}°C</span>
               )}
               {hoveredNode.type === "sound" && hoveredNode.sensorData.sound && (
-                <span> {hoveredNode.sensorData.sound}dB</span>
+                <span> {hoveredNode.sensorData.sound.value}dB</span>
               )}
               {hoveredNode.type === "camera" && hoveredNode.sensorData.camera && (
                 <span> Luz: {hoveredNode.sensorData.camera.lightLevel}% | 
