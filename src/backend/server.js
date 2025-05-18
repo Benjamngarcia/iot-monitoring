@@ -43,6 +43,7 @@ defaultDevices.forEach(device => {
 let networkStats = {
   totalDevices: registeredDevices.size,
   onlineDevices: registeredDevices.size,
+  offlineDevices: 0,
   networkQuality: 85,
   activeCameras: 0,
   motionDetected: 0
@@ -65,7 +66,8 @@ app.post('/api/devices/register', (req, res) => {
   
   // Update network stats
   networkStats.totalDevices = registeredDevices.size;
-  networkStats.onlineDevices = registeredDevices.size;
+  networkStats.onlineDevices = Array.from(registeredDevices.values()).filter(d => d.status === 'online').length;
+  networkStats.offlineDevices = Array.from(registeredDevices.values()).filter(d => d.status === 'offline').length;
   if (deviceType === 'camera') {
     networkStats.activeCameras++;
   }
@@ -91,18 +93,53 @@ app.post('/api/devices/unregister', (req, res) => {
 
   const device = registeredDevices.get(deviceId);
   if (device) {
+    // Mark device as offline instead of deleting it
+    device.status = 'offline';
     if (device.type === 'camera') {
       networkStats.activeCameras = Math.max(0, networkStats.activeCameras - 1);
     }
-    registeredDevices.delete(deviceId);
   }
   
   // Update network stats
   networkStats.totalDevices = registeredDevices.size;
-  networkStats.onlineDevices = registeredDevices.size;
+  networkStats.onlineDevices = Array.from(registeredDevices.values()).filter(d => d.status === 'online').length;
+  networkStats.offlineDevices = Array.from(registeredDevices.values()).filter(d => d.status === 'offline').length;
 
   res.json({ 
-    message: `Device ${deviceId} unregistered successfully`,
+    message: `Device ${deviceId} marked as offline`,
+    networkStats 
+  });
+});
+
+// API endpoint to reactivate a device
+app.post('/api/devices/reactivate', (req, res) => {
+  const { deviceId } = req.body;
+  if (!deviceId) {
+    return res.status(400).json({ error: 'Device ID is required' });
+  }
+
+  const device = registeredDevices.get(deviceId);
+  if (!device) {
+    return res.status(404).json({ error: 'Device not found' });
+  }
+
+  if (device.status === 'online') {
+    return res.status(400).json({ error: 'Device is already online' });
+  }
+
+  // Reactivate the device
+  device.status = 'online';
+  device.data = generateDeviceData(device.type);
+  
+  // Update network stats
+  networkStats.onlineDevices = Array.from(registeredDevices.values()).filter(d => d.status === 'online').length;
+  networkStats.offlineDevices = Array.from(registeredDevices.values()).filter(d => d.status === 'offline').length;
+  if (device.type === 'camera') {
+    networkStats.activeCameras++;
+  }
+
+  res.json({ 
+    message: `Device ${deviceId} reactivated successfully`,
     networkStats 
   });
 });
@@ -148,6 +185,7 @@ wss.on("connection", (ws) => {
     networkStats: {
       totalDevices: networkStats.totalDevices,
       onlineDevices: networkStats.onlineDevices,
+      offlineDevices: networkStats.offlineDevices,
       networkQuality: networkStats.networkQuality,
       activeCameras: networkStats.activeCameras,
       motionDetected: networkStats.motionDetected
@@ -176,6 +214,7 @@ setInterval(() => {
     networkStats: {
       totalDevices: networkStats.totalDevices,
       onlineDevices: networkStats.onlineDevices,
+      offlineDevices: networkStats.offlineDevices,
       networkQuality: networkStats.networkQuality,
       activeCameras: networkStats.activeCameras,
       motionDetected: networkStats.motionDetected

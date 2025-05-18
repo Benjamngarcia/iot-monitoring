@@ -27,10 +27,17 @@ ChartJS.register(
   Filler
 );
 
+interface DeviceStatusHistory {
+  timestamp: string;
+  online: number;
+  offline: number;
+}
+
 interface Device {
   id: string;
   type: string;
   status: 'online' | 'offline';
+  lastUpdate: Date;
   data: {
     temperatura?: string;
     sonido?: number;
@@ -42,16 +49,29 @@ interface Device {
 interface NetworkStats {
   totalDevices: number;
   onlineDevices: number;
+  offlineDevices: number;
   networkQuality: number;
   activeCameras: number;
   motionDetected: number;
+}
+
+interface IncomingDevice {
+  id: string;
+  type: string;
+  status: 'online' | 'offline';
+  data: {
+    temperatura?: string;
+    sonido?: number;
+    movimiento?: boolean;
+    timestamp: string;
+  };
 }
 
 interface WebSocketMessage {
   type: 'init' | 'update';
   timestamp: string;
   networkStats: NetworkStats;
-  devices: Device[];
+  devices: IncomingDevice[];
 }
 
 const Dashboard: React.FC = () => {
@@ -66,6 +86,7 @@ const Dashboard: React.FC = () => {
   const [networkStats, setNetworkStats] = useState<NetworkStats>({
     totalDevices: 0,
     onlineDevices: 0,
+    offlineDevices: 0,
     networkQuality: 0,
     activeCameras: 0,
     motionDetected: 0
@@ -74,63 +95,86 @@ const Dashboard: React.FC = () => {
   const [temperatureHistory, setTemperatureHistory] = useState<{ value: number; timestamp: string }[]>([]);
   const [soundHistory, setSoundHistory] = useState<{ value: number; timestamp: string }[]>([]);
   const [motionHistory, setMotionHistory] = useState<{ value: number; timestamp: string }[]>([]);
-  const [deviceStatusHistory, setDeviceStatusHistory] = useState<{ online: number; offline: number; timestamp: string }[]>([]);
+  const [deviceStatusHistory, setDeviceStatusHistory] = useState<DeviceStatusHistory[]>([]);
   const [networkQualityHistory, setNetworkQualityHistory] = useState<{ value: number; timestamp: string }[]>([]);
 
   useEffect(() => {
     if (lastMessage) {
-      const data = lastMessage as WebSocketMessage;
-      if (data.type === 'init' || data.type === 'update') {
-        setNetworkStats(data.networkStats);
-        setDevices(data.devices);
+      try {
+        const data = lastMessage as WebSocketMessage;
+        console.log('Received WebSocket message:', data);
+        
+        if (data.type === 'init' || data.type === 'update') {
+          // Update network stats
+          setNetworkStats({
+            totalDevices: data.networkStats.totalDevices,
+            onlineDevices: data.networkStats.onlineDevices,
+            offlineDevices: data.networkStats.offlineDevices || 0,
+            networkQuality: data.networkStats.networkQuality,
+            activeCameras: data.networkStats.activeCameras,
+            motionDetected: data.networkStats.motionDetected
+          });
 
-        // Update temperature history
-        const tempReadings = data.devices
-          .filter(d => d.type === 'temperature' && d.status === 'online' && d.data.temperatura)
-          .map(d => ({
-            value: parseFloat(d.data.temperatura!),
-            timestamp: d.data.timestamp
-          }));
-        if (tempReadings.length > 0) {
-          setTemperatureHistory(prev => [...prev, ...tempReadings].slice(-20));
+          // Update device status history
+          setDeviceStatusHistory(prev => {
+            const newHistory = [...prev, {
+              timestamp: data.timestamp,
+              online: data.networkStats.onlineDevices,
+              offline: data.networkStats.offlineDevices || 0
+            }];
+            return newHistory.slice(-20); // Keep last 20 entries
+          });
+
+          // Update device table
+          setDevices(data.devices.map(device => ({
+            id: device.id,
+            type: device.type,
+            status: device.status,
+            lastUpdate: new Date(device.data.timestamp),
+            data: device.data
+          })));
+
+          // Update temperature history
+          const tempReadings = data.devices
+            .filter((d: IncomingDevice) => d.type === 'temperature' && d.status === 'online' && d.data.temperatura)
+            .map((d: IncomingDevice) => ({
+              value: parseFloat(d.data.temperatura!),
+              timestamp: d.data.timestamp
+            }));
+          if (tempReadings.length > 0) {
+            setTemperatureHistory(prev => [...prev, ...tempReadings].slice(-20));
+          }
+
+          // Update sound history
+          const soundReadings = data.devices
+            .filter((d: IncomingDevice) => d.type === 'sound' && d.status === 'online' && d.data.sonido)
+            .map((d: IncomingDevice) => ({
+              value: d.data.sonido!,
+              timestamp: d.data.timestamp
+            }));
+          if (soundReadings.length > 0) {
+            setSoundHistory(prev => [...prev, ...soundReadings].slice(-20));
+          }
+
+          // Update motion history
+          const motionReadings = data.devices
+            .filter((d: IncomingDevice) => d.type === 'camera' && d.status === 'online' && d.data.movimiento !== undefined)
+            .map((d: IncomingDevice) => ({
+              value: d.data.movimiento ? 1 : 0,
+              timestamp: d.data.timestamp
+            }));
+          if (motionReadings.length > 0) {
+            setMotionHistory(prev => [...prev, ...motionReadings].slice(-20));
+          }
+
+          // Update network quality history
+          setNetworkQualityHistory(prev => [...prev, {
+            value: data.networkStats.networkQuality,
+            timestamp: data.timestamp
+          }].slice(-20));
         }
-
-        // Update sound history
-        const soundReadings = data.devices
-          .filter(d => d.type === 'sound' && d.status === 'online' && d.data.sonido)
-          .map(d => ({
-            value: d.data.sonido!,
-            timestamp: d.data.timestamp
-          }));
-        if (soundReadings.length > 0) {
-          setSoundHistory(prev => [...prev, ...soundReadings].slice(-20));
-        }
-
-        // Update motion history
-        const motionReadings = data.devices
-          .filter(d => d.type === 'camera' && d.status === 'online' && d.data.movimiento !== undefined)
-          .map(d => ({
-            value: d.data.movimiento ? 1 : 0,
-            timestamp: d.data.timestamp
-          }));
-        if (motionReadings.length > 0) {
-          setMotionHistory(prev => [...prev, ...motionReadings].slice(-20));
-        }
-
-        // Update device status history
-        const onlineCount = data.devices.filter(d => d.status === 'online').length;
-        const offlineCount = data.devices.filter(d => d.status === 'offline').length;
-        setDeviceStatusHistory(prev => [...prev, {
-          online: onlineCount,
-          offline: offlineCount,
-          timestamp: data.timestamp
-        }].slice(-20));
-
-        // Update network quality history
-        setNetworkQualityHistory(prev => [...prev, {
-          value: data.networkStats.networkQuality,
-          timestamp: data.timestamp
-        }].slice(-20));
+      } catch (err) {
+        console.error('Error processing WebSocket message:', err);
       }
     }
   }, [lastMessage]);
@@ -429,12 +473,12 @@ const Dashboard: React.FC = () => {
                     </span>
                   </td>
                   <td>
-                    {device.status === 'online' && (
+                    {device.status === 'online' ? (
                       device.type === 'temperature' ? `${device.data.temperatura}°C` :
                       device.type === 'sound' ? `${device.data.sonido}dB` :
                       device.type === 'camera' ? (device.data.movimiento ? 'Motion Detected' : 'No Motion') :
                       'N/A'
-                    )}
+                    ) : 'Offline'}
                   </td>
                   <td>{new Date(device.data.timestamp).toLocaleString()}</td>
                 </tr>

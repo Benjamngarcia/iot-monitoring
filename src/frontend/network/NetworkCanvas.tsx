@@ -57,6 +57,7 @@ interface WebSocketMessage {
     networkQuality: number;
     activeCameras: number;
     motionDetected: number;
+    offlineDevices: number;
   };
   devices: Device[];
 }
@@ -142,6 +143,15 @@ function NetworkCanvas() {
         
         if (data.type === 'init' || data.type === 'update') {
           console.log('Processing devices:', data.devices);
+          
+          // Calculate offline devices count
+          const offlineDevices = data.devices.filter(device => device.status === 'offline').length;
+          
+          // Update network stats with offline devices count
+          const updatedNetworkStats = {
+            ...data.networkStats,
+            offlineDevices: offlineDevices
+          };
           
           // Update nodes based on device data
           setNodes(prevNodes => {
@@ -278,6 +288,9 @@ function NetworkCanvas() {
           });
           
           setDeviceCount(data.networkStats.totalDevices);
+          
+          // Update the network stats in the WebSocket message
+          (data as any).networkStats = updatedNetworkStats;
         }
       } catch (err) {
         console.error('Error processing WebSocket message:', err);
@@ -322,15 +335,34 @@ function NetworkCanvas() {
     const targetNode = nodes.find(n => n.id === targetId);
     if (!targetNode) return;
 
+    // Skip if trying to turn off a default device
+    if (!turnOn && (targetId === 'server-1' || targetId === 'pc-1')) {
+      return;
+    }
+
     const newStatus = turnOn ? "online" : "offline";
     if (targetNode.status === newStatus) return;
 
-    if (!turnOn) {
-      try {
+    try {
+      if (!turnOn) {
         await unregisterDevice(targetNode.id);
-      } catch (err) {
-        console.error('Failed to unregister device:', err);
+      } else {
+        // Reactivate the device
+        const response = await fetch('http://localhost:4000/api/devices/reactivate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ deviceId: targetNode.id }),
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to reactivate device');
+        }
       }
+    } catch (err) {
+      console.error('Failed to change device status:', err);
+      return; // Stop cascading if operation fails
     }
 
     setNodes(prev => prev.map(node => {
@@ -340,9 +372,16 @@ function NetworkCanvas() {
       return node;
     }));
 
-    targetNode.connections.forEach(connId => {
-      toggleStatusCascade(connId, turnOn, visited);
-    });
+    // Only cascade to devices that depend on this one (children)
+    const dependentNodes = nodes.filter(node => 
+      node.connections.includes(targetId) && 
+      !visited.has(node.id)
+    );
+
+    // Recursively toggle status for dependent nodes
+    for (const dependentNode of dependentNodes) {
+      await toggleStatusCascade(dependentNode.id, turnOn, visited);
+    }
   };
 
   const handleClick = (e: React.MouseEvent) => {

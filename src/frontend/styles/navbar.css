@@ -1,0 +1,100 @@
+.navbar {
+  background: #ffffff;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  padding: 1rem 2rem;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.navbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  text-decoration: none;
+  color: #333;
+}
+
+.navbar-brand img {
+  height: 40px;
+  width: auto;
+}
+
+.navbar-brand h1 {
+  font-size: 1.5rem;
+  margin: 0;
+  font-weight: 600;
+}
+
+.navbar-menu {
+  display: flex;
+  gap: 2rem;
+  align-items: center;
+}
+
+.navbar-link {
+  color: #666;
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s ease;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+}
+
+.navbar-link:hover {
+  color: #007bff;
+  background: rgba(0,123,255,0.1);
+}
+
+.navbar-link.active {
+  color: #007bff;
+  background: rgba(0,123,255,0.1);
+}
+
+.footer {
+  background: #ffffff;
+  box-shadow: 0 -2px 4px rgba(0,0,0,0.1);
+  padding: 1.5rem 2rem;
+  margin-top: 2rem;
+  text-align: center;
+  color: #666;
+}
+
+.footer-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.footer-links {
+  display: flex;
+  gap: 2rem;
+}
+
+.footer-link {
+  color: #666;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.footer-link:hover {
+  color: #007bff;
+}
+
+.footer-copyright {
+  font-size: 0.9rem;
+}
+
+/* Add margin to main content to account for fixed navbar */
+.main-content {
+  margin-top: 80px;
+  min-height: calc(100vh - 80px - 100px); /* viewport height - navbar - footer */
+  padding: 2rem;
+} 
